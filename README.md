@@ -15,7 +15,7 @@ An autonomous crypto trading bot for [Indodax](https://indodax.com) powered by *
 |---|---|
 | 🧠 Claude AI (Sonnet 4.6) | Every trade decision analyzed by Claude |
 | 📚 Persistent memory | Learns from past trades, builds coin behavior profile per pair |
-| 📰 Live news | Fetches coin news every 30 min via Claude web search |
+| 📰 Live news | Fetches coin news once per day via Claude web search |
 | 📊 Correlation tracking | Tracks coin vs BTC/ETH correlation in real-time |
 | 🎯 Profit targeting | Auto-sizes position to hit your IDR profit target |
 | 📈 Trailing stop-loss | Raises stop-loss automatically as price climbs |
@@ -228,7 +228,7 @@ Model: `claude-sonnet-4-6`
 | 300s (default) | ~$0.15/hr | ~53 hours |
 | 120s | ~$0.25/hr | ~32 hours |
 
-Tip: news is cached for 30 min to minimize API calls.
+Tip: news is cached for 24 hours — fetched once per day.
 
 ---
 
