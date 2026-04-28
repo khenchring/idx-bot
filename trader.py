@@ -157,19 +157,19 @@ class Trader:
         # ── No position — check entry ─────────────────────────────────────────
 
         # Hard gate: momentum score check BEFORE calling AI
-        passes, reason = self.risk.passes_entry_filter(ind)
+        passes, entry_mode, reason = self.risk.passes_entry_filter(ind)
         if not passes:
             log.info(f"Entry blocked: {reason}")
             ui.append_log(f"Entry blocked: {reason}")
             return
 
         score, reasons = self.risk.momentum_score(ind)
-        log.info(f"Momentum score: {score}/5 — {', '.join(reasons)}")
-        ui.append_log(f"Momentum {score}/5 | {', '.join(reasons[:2])}")
+        log.info(f"Entry mode: {entry_mode.upper()} | Momentum {score}/5 — {', '.join(reasons)}")
+        ui.append_log(f"[{entry_mode.upper()}] Momentum {score}/5 | {reason[:80]}")
 
-        # AI analysis
+        # AI analysis — pass entry mode so Claude can reason appropriately
         try:
-            decision = analyze(ind, self._position, bal)
+            decision = analyze(ind, self._position, bal, entry_mode=entry_mode)
         except Exception as e:
             log.error(f"AI analysis failed: {e}")
             ui.append_log(f"AI failed: {e}", "ERR")
@@ -205,24 +205,36 @@ class Trader:
             log.info(f"[HOLD] {decision.reasoning}")
 
     def _open_position(self, decision: AIDecision, ind: Indicators, bal: dict):
-        if cfg.USE_PROFIT_TARGET:
+        entry_mode = decision.entry_mode if hasattr(decision, "entry_mode") else "normal"
+
+        if entry_mode == "overbought_momentum":
+            # Overbought mode: tight scalp — quick TP, tight SL
+            stop_loss, take_profit, sl_pct, tp_pct = self.risk.overbought_sl_tp(ind.price)
+            idr_to_spend = self.risk.calc_idr_to_spend(bal["idr"], ind)
+            decision.stop_loss_pct   = sl_pct
+            decision.take_profit_pct = tp_pct
+            log.info(f"Overbought scalp mode — quick TP {tp_pct:.1f}% / tight SL {sl_pct:.1f}%")
+        elif cfg.USE_PROFIT_TARGET:
             idr_to_spend, tp_pct, sl_pct, expected = self.risk.calc_position_for_profit_target(ind.price)
             decision.stop_loss_pct   = sl_pct
             decision.take_profit_pct = tp_pct
+            stop_loss   = self.risk.calc_stop_loss(ind.price, sl_pct)
+            take_profit = self.risk.calc_take_profit(ind.price, tp_pct)
             log.info(f"Profit target: ~Rp {expected:,.0f} expected")
         else:
             idr_to_spend = self.risk.calc_idr_to_spend(bal["idr"], ind)
+            stop_loss    = self.risk.calc_stop_loss(ind.price, decision.stop_loss_pct)
+            take_profit  = self.risk.calc_take_profit(ind.price, decision.take_profit_pct)
 
         idr_to_spend = min(idr_to_spend, bal["idr"] * 0.95)
-        stop_loss    = self.risk.calc_stop_loss(ind.price, decision.stop_loss_pct)
-        take_profit  = self.risk.calc_take_profit(ind.price, decision.take_profit_pct)
         coin_est     = (idr_to_spend * 0.997) / (ind.price * 1.005)
 
-        # Enforce minimum 2% profit gap
-        min_tp = ind.price * (1 + cfg.MIN_PROFIT_PERCENT / 100)
-        if take_profit < min_tp:
-            take_profit = round(min_tp, 2)
-            log.info(f"TP adjusted to enforce {cfg.MIN_PROFIT_PERCENT}% minimum: Rp {take_profit:,.2f}")
+        # Enforce minimum profit gap (skip for overbought scalp — already set)
+        if entry_mode != "overbought_momentum":
+            min_tp = ind.price * (1 + cfg.MIN_PROFIT_PERCENT / 100)
+            if take_profit < min_tp:
+                take_profit = round(min_tp, 2)
+                log.info(f"TP adjusted to enforce {cfg.MIN_PROFIT_PERCENT}% minimum: Rp {take_profit:,.2f}")
 
         self.risk.reset_trailing_stop(ind.price)
 

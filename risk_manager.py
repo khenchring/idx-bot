@@ -156,26 +156,80 @@ class RiskManager:
 
         return score, reasons
 
+    def classify_entry_mode(self, ind: Indicators) -> str:
+        """
+        Classify current market condition into an entry mode.
+        Returns: 'normal' | 'overbought_momentum' | 'blocked'
+        """
+        score, _ = self.momentum_score(ind)
+
+        # Freefall — always block
+        if ind.rsi < cfg.MIN_RSI_ENTRY:
+            return "blocked"
+
+        # Volume too low — always block
+        if ind.volume_ratio < cfg.MIN_VOLUME_RATIO:
+            return "blocked"
+
+        # Not enough signals — block
+        if score < cfg.MIN_MOMENTUM_SCORE:
+            return "blocked"
+
+        # Overbought zone — only allow if STRONG bull momentum confirms
+        if ind.rsi > cfg.MAX_RSI_ENTRY:
+            bull_signals = sum([
+                ind.ema_cross == "BULL",
+                ind.macd_hist > 0,
+                ind.macd > 0,
+                ind.bb_pct > 0.7,           # price near upper band = strong momentum
+                ind.trend == "UP",
+                ind.volume_ratio >= 1.5,    # high volume confirms breakout
+                ind.price_change_pct > 0,
+            ])
+            if bull_signals >= 5:
+                return "overbought_momentum"
+            return "blocked"
+
+        # Normal entry zone
+        return "normal"
+
+    def overbought_sl_tp(self, entry_price: float) -> tuple:
+        """
+        Tighter TP/SL for overbought momentum entries.
+        Take profit quickly (1.5%), tight stop (1%) to protect against reversal.
+        """
+        tp_pct = max(cfg.MIN_PROFIT_PERCENT, 1.5)   # quick TP
+        sl_pct = 1.0                                  # very tight stop
+        sl     = round(entry_price * (1 - sl_pct / 100), 2)
+        tp     = round(entry_price * (1 + tp_pct / 100), 2)
+        log.info(
+            f"[RISK] Overbought momentum entry | "
+            f"TP: {tp_pct:.1f}% (Rp {tp:,.2f}) | SL: {sl_pct:.1f}% (Rp {sl:,.2f}) — quick scalp"
+        )
+        return sl, tp, sl_pct, tp_pct
+
     def passes_entry_filter(self, ind: Indicators) -> tuple:
         """
-        Returns (passes: bool, reason: str).
-        Hard gates that block entry regardless of AI confidence.
+        Returns (passes: bool, mode: str, reason: str).
+        mode is 'normal' or 'overbought_momentum'.
         """
+        mode = self.classify_entry_mode(ind)
         score, reasons = self.momentum_score(ind)
+        summary = f"Score {score}/5 — {', '.join(reasons[:3])}"
 
-        if score < cfg.MIN_MOMENTUM_SCORE:
-            return False, f"Momentum score {score}/{cfg.MIN_MOMENTUM_SCORE} required — {', '.join(reasons[:2])}"
+        if mode == "blocked":
+            if ind.rsi < cfg.MIN_RSI_ENTRY:
+                return False, mode, f"RSI {ind.rsi:.1f} too low — freefall risk"
+            if ind.volume_ratio < cfg.MIN_VOLUME_RATIO:
+                return False, mode, f"Volume {ind.volume_ratio:.2f}x too low (need {cfg.MIN_VOLUME_RATIO}x)"
+            if ind.rsi > cfg.MAX_RSI_ENTRY:
+                return False, mode, f"RSI {ind.rsi:.1f} overbought but bull signals insufficient for momentum trade"
+            return False, mode, f"Momentum {score}/{cfg.MIN_MOMENTUM_SCORE} — {summary}"
 
-        if ind.rsi > cfg.MAX_RSI_ENTRY:
-            return False, f"RSI {ind.rsi:.1f} too high (max {cfg.MAX_RSI_ENTRY}) — overbought"
+        if mode == "overbought_momentum":
+            return True, mode, f"OVERBOUGHT MOMENTUM — RSI {ind.rsi:.1f} but strong bull signals ({summary})"
 
-        if ind.rsi < cfg.MIN_RSI_ENTRY:
-            return False, f"RSI {ind.rsi:.1f} too low (min {cfg.MIN_RSI_ENTRY}) — potential freefall"
-
-        if ind.volume_ratio < cfg.MIN_VOLUME_RATIO:
-            return False, f"Volume too low: {ind.volume_ratio:.2f}x (need {cfg.MIN_VOLUME_RATIO}x)"
-
-        return True, f"Score {score}/5 — {', '.join(reasons)}"
+        return True, mode, summary
 
     # ─── SL/TP check ──────────────────────────────────────────────────────────
 

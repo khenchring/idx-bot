@@ -51,6 +51,7 @@ class AIDecision:
     stop_loss_pct: Optional[float]
     take_profit_pct: Optional[float]
     risk_reward: Optional[float]
+    entry_mode: str = "normal"
 
 
 def _format_trade_history(trades: list) -> str:
@@ -82,7 +83,7 @@ def _format_profile(profile: dict) -> str:
     return "\n".join(parts) if parts else "Profile exists but is empty."
 
 
-def analyze(ind: Indicators, position: Optional[dict], balance: dict) -> AIDecision:
+def analyze(ind: Indicators, position: Optional[dict], balance: dict, entry_mode: str = 'normal') -> AIDecision:
     base  = cfg.base_currency.upper()
     pair  = cfg.TRADING_PAIR
     idr_balance  = balance.get("idr", 0)
@@ -116,6 +117,29 @@ def analyze(ind: Indicators, position: Optional[dict], balance: dict) -> AIDecis
     # Fetch market correlation + news (cached, non-blocking)
     ctx = market_context.get_full_context(pair, ind.price)
 
+    # Build overbought context block
+    overbought_block = ""
+    if entry_mode == "overbought_momentum":
+        overbought_block = f"""
+=== ⚠️ OVERBOUGHT MOMENTUM MODE ===
+RSI is above {cfg.MAX_RSI_ENTRY} but ALL other bull signals are strongly aligned.
+The system has detected a potential breakout continuation pattern.
+In strong bull trends, overbought conditions can persist for extended periods.
+
+Your task: decide whether this is a genuine momentum breakout worth a QUICK SCALP,
+or a bull trap about to reverse.
+
+If BUY: position will use TIGHT stop-loss (1%) and QUICK take-profit (1.5-2%).
+The goal is a fast in-and-out — not a long hold.
+Only BUY if you see strong evidence price will continue UP at least another 1.5%.
+
+Key questions to answer:
+- Is volume confirming the move (high volume = real breakout)?
+- Is MACD still accelerating upward or starting to flatten?
+- Is this the START of a move or has it already run too far?
+- Does news/context support continued upward momentum?
+"""
+
     prompt = f"""Analyze {base}/IDR and decide: BUY, SELL, or HOLD.
 
 === CURRENT MARKET ===
@@ -145,6 +169,7 @@ Recent trades:
 
 {ctx}
 
+{overbought_block}
 === PROFIT TARGET ===
 Target profit per trade: Rp {cfg.TARGET_PROFIT_MIN_IDR:,.0f} – Rp {cfg.TARGET_PROFIT_MAX_IDR:,.0f} IDR
 The position size and TP% will be auto-calculated to hit this range.
@@ -199,8 +224,9 @@ Respond ONLY with this JSON:
         stop_loss_pct=data.get("stop_loss_pct"),
         take_profit_pct=data.get("take_profit_pct"),
         risk_reward=data.get("risk_reward"),
+        entry_mode=entry_mode,
     )
-    log.info(f"[AI] {decision.action} | {decision.confidence}% | {decision.signal} | {decision.reasoning}")
+    log.info(f"[AI] {decision.action} | {decision.confidence}% | {decision.signal} | [{entry_mode}] {decision.reasoning}")
     return decision
 
 
